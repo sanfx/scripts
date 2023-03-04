@@ -1,0 +1,96 @@
+#!/usr/bin/env python3
+
+import os
+import argparse
+import getpass
+from cryptography.fernet import Fernet
+import mysql.connector
+
+CONFIG_FILE = '.mysql.key'
+
+
+def get_config():
+    config = {}
+    config_file = '~/.mysql.key'
+    if os.path.isfile(CONFIG_FILE):
+        with open(CONFIG_FILE, 'rb') as file:
+            key = file.read()
+            fernet = Fernet(key)
+            with open(CONFIG_FILE + '.enc', 'rb') as enc_file:
+                data = enc_file.read()
+                decrypted = fernet.decrypt(data)
+                config = eval(decrypted)
+    return config
+
+
+def save_config(config):
+    key = Fernet.generate_key()
+    fernet = Fernet(key)
+    encrypted = fernet.encrypt(str(config).encode())
+    with open(CONFIG_FILE, 'wb') as file:
+        file.write(key)
+    with open(CONFIG_FILE + '.enc', 'wb') as enc_file:
+        enc_file.write(encrypted)
+
+
+def test_connection(config):
+    try:
+        cnx = mysql.connector.connect(**config)
+        cursor = cnx.cursor()
+        cursor.execute("SELECT DATABASE()")
+        database_name = cursor.fetchone()[0]
+        cursor.close()
+        cnx.close()
+        print(f"Connected to {database_name} database")
+        return True
+    except mysql.connector.Error as err:
+        print(f"Failed to connect to database: {err}")
+        return False
+
+
+def prompt_for_config():
+    config = {}
+    config['user'] = os.environ.get('MYSQL_USER') or input('Enter MySQL user: ')
+    config['password'] = getpass.getpass('Enter MySQL password: ')
+    config['host'] = os.environ.get('MYSQL_HOST') or input('Enter MySQL host: ')
+    config['database'] = os.environ.get('MYSQL_DB') or input('Enter MySQL database: ')
+    config['port'] = os.environ.get('MYSQL_PORT') or 3306
+    return config
+
+
+def get_parsed_args():
+    """ Gets parser for the user arguments.
+    """
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-u", "--user", help="MySQL username")
+    parser.add_argument("-p", "--password", help="MySQL password")
+    parser.add_argument("-d", "--database", help="MySQL database")
+    parser.add_argument("-H", "--host", help="MySQL hostname")
+    parser.add_argument("-P", "--port", help="MySQL port", default=3306)
+    parser.add_argument("-f", "--force", help="Force prompt for credentials", action="store_true")
+    return parser.parse_args()
+
+
+def main():
+    args = get_parsed_args()
+
+    config = get_config()
+
+    if not args.force and config and test_connection(config):
+        print("Using configuration from file.")
+    else:
+        config = prompt_for_config()
+
+        while not test_connection(config):
+            print("Failed to connect to database.")
+            config = prompt_for_config()
+
+        save_config(config)
+
+    password = config.pop('password')
+    print(f"MySQL config: {config}")
+    print(f"MySQL password: {len(password) * '*'}")
+
+
+if __name__ == '__main__':
+    main()
